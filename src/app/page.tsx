@@ -1,0 +1,217 @@
+"use client";
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { BookOpen, PanelLeft } from "lucide-react";
+import { BackgroundFX } from "@/components/layout/background-fx";
+import { ServiceNav } from "@/components/layout/service-nav";
+import { BootOverlay } from "@/components/layout/boot-overlay";
+import { Footer } from "@/components/layout/footer";
+import { MODULE_COMPONENTS } from "@/components/services/registry";
+import { SERVICE_MAP, SERVICES, resolveServiceKey, parseBoolParam } from "@/lib/services-data";
+import { SNOW_ICON_MAP, FlakeIcon } from "@/components/shared/snowflake-icons";
+import type { SnowIconId } from "@/components/shared/snowflake-icons";
+
+export default function Home() {
+  const [booted, setBooted] = useState(false);
+  const [activeId, setActiveId] = useState<string>(SERVICES[0].id);
+  const [renderKey, setRenderKey] = useState(0);
+  const [mapperHidden, setMapperHidden] = useState(false);
+  const urlReady = useRef(false);
+
+  const meta = useMemo(() => SERVICE_MAP[activeId], [activeId]);
+  const ActiveModule = MODULE_COMPONENTS[activeId];
+
+  const select = useCallback((id: string) => {
+    setActiveId(id);
+    setRenderKey((k) => k + 1);
+  }, []);
+
+  // ── URL deep links ────────────────────────────────────────────────────
+  // ?module=<id|abbr> opens that module directly (e.g. ?module=wh)
+  // &mapperhidden=true|false hides/shows the module mapper sidebar.
+  // Applied inside requestAnimationFrame (boot overlay still covers the
+  // viewport) so the very first paint stays deterministic.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      let svc: string | null = null;
+      let hidden = false;
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        svc = resolveServiceKey(sp.get("module"));
+        const mh = sp.get("mapperhidden");
+        hidden = parseBoolParam(mh);
+        if (svc) {
+          setActiveId(svc);
+          setRenderKey((k) => k + 1);
+        }
+        if (mh !== null) setMapperHidden(hidden);
+      } catch {
+        /* noop */
+      }
+      urlReady.current = true;
+      // canonicalize the address bar so the view is always shareable
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.set("module", svc ?? SERVICES[0].id);
+        u.searchParams.set("mapperhidden", hidden ? "true" : "false");
+        window.history.replaceState(null, "", u.toString());
+      } catch {
+        /* noop */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // keep ?module= & ?mapperhidden= in sync with UI state (shareable URL)
+  useEffect(() => {
+    if (!urlReady.current) return;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("module", activeId);
+      u.searchParams.set("mapperhidden", mapperHidden ? "true" : "false");
+      window.history.replaceState(null, "", u.toString());
+    } catch {
+      /* noop */
+    }
+  }, [activeId, mapperHidden]);
+
+  const toggleMapper = useCallback(() => setMapperHidden((h) => !h), []);
+
+  // keyboard: module hotkeys 1..7
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const svc = SERVICES.find((s) => s.hotkey === e.key);
+      if (svc) select(svc.id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [select]);
+
+  const Icon = SNOW_ICON_MAP[meta.iconId as SnowIconId] ?? FlakeIcon;
+
+  return (
+    <div className="min-h-screen flex flex-col scanlines relative">
+      <BackgroundFX />
+
+      <AnimatePresence>
+        {!booted && <BootOverlay onDone={() => setBooted(true)} />}
+      </AnimatePresence>
+
+      <main className="flex-1 flex flex-col" role="main">
+        <div className="flex-1 w-full px-3 sm:px-5 py-5 flex flex-col lg:flex-row gap-5 items-start">
+          {/* NAV RAIL — sticky, 96vh on desktop.
+              Hidden entirely when ?mapperhidden=true — restore via the SHOW MAPPER chip. */}
+          {!mapperHidden && (
+            <div className="w-full lg:w-auto lg:sticky lg:top-[2vh] lg:h-[96vh] lg:-mt-1.5">
+              <ServiceNav activeId={activeId} onSelect={select} onHide={toggleMapper} />
+            </div>
+          )}
+
+          {/* MODULE VIEWPORT */}
+          <div className="flex-1 min-w-0 w-full">
+            {/* mapper hidden via ?mapperhidden=true — inline restore chip */}
+            {mapperHidden && (
+              <div className="flex items-center gap-3 mb-3">
+                <button
+                  type="button"
+                  onClick={toggleMapper}
+                  aria-label="Show module mapper sidebar"
+                  title="Show module mapper (mapperhidden=false)"
+                  className="flex items-center gap-2 px-3 py-2 text-[9px] font-bold uppercase tracking-[0.2em] border border-snow/50 bg-black/60 backdrop-blur-md text-snow hover:bg-snow/10 hover:border-snow transition-colors box-glow"
+                >
+                  <PanelLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                  SHOW MAPPER
+                </button>
+                <span className="text-[8px] uppercase tracking-[0.24em] text-muted-foreground hidden sm:inline">
+                  MAPPER HIDDEN — URL PARAM mapperhidden=true
+                </span>
+              </div>
+            )}
+            {/* module header bar */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={`meta-${activeId}`}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.35 }}
+                className="glass-deep corner-brackets p-4 sm:p-5 mb-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    <span className="flex items-center justify-center w-11 h-11 border border-snow/50 bg-black/40 box-glow shrink-0 text-snow">
+                      <Icon className="w-8 h-8" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[8px] uppercase tracking-[0.3em] text-magenta font-bold">
+                        MODULE {meta.index} {"//"} {meta.category} — SVC: {meta.abbr}
+                      </p>
+                      <h2 className="text-base sm:text-xl font-extrabold uppercase tracking-[0.12em] text-foreground mt-0.5">
+                        {meta.name}
+                      </h2>
+                      <p className="text-[10px] sm:text-xs text-snow/90 mt-1 font-bold uppercase tracking-[0.14em]">
+                        {meta.tagline}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-start sm:items-end gap-2.5">
+                    <div className="hidden sm:grid grid-cols-4 gap-2">
+                      {meta.stats.map((st) => (
+                        <div key={st.label} className="glass-inset px-2 py-1.5 min-w-[76px]">
+                          <p className="text-[7px] uppercase tracking-[0.18em] text-muted-foreground">{st.label}</p>
+                          <p className="text-[11px] font-extrabold text-snow">{st.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {meta.docs && meta.docs.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5" aria-label="Official Snowflake documentation links">
+                        {meta.docs.map((d) => (
+                          <a
+                            key={d.url}
+                            href={d.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={d.title}
+                            aria-label={`${d.title} — opens the official Snowflake documentation in a new tab`}
+                            className="flex items-center gap-1.5 px-2 py-1.5 text-[8px] font-bold uppercase tracking-[0.16em] border border-foreground/20 bg-black/50 backdrop-blur-md text-muted-foreground hover:border-snow/60 hover:text-snow transition-colors"
+                          >
+                            <BookOpen className="w-3 h-3 shrink-0" aria-hidden="true" />
+                            {d.label}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-3 text-[10px] sm:text-[11px] text-muted-foreground leading-relaxed max-w-4xl">
+                  {meta.description}
+                </p>
+              </motion.div>
+            </AnimatePresence>
+
+            {/* active module */}
+            <div className="glass-deep corner-brackets p-4 sm:p-6 min-h-[560px]" data-stage-glass>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${activeId}-${renderKey}`}
+                  initial={{ opacity: 0, scale: 0.985, filter: "blur(6px)" }}
+                  animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, scale: 0.99, filter: "blur(6px)" }}
+                  transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                  className="w-full"
+                  data-stage-filter
+                >
+                  {ActiveModule ? <ActiveModule /> : null}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <Footer />
+    </div>
+  );
+}
